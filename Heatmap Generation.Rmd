@@ -1,0 +1,139 @@
+---
+title: "Kruskal Heatmap"
+output: html_document
+date: '2024-04-25'
+---
+
+```{r}
+#This script is used to generate the heatmap from a phyloseq object and the results of a simper/kruskal wallace analysis
+
+```
+
+#Set working directory
+```{r}
+
+setwd("INSERT ADDRESS HERE")
+
+```
+
+#Loading Libraries
+```{r, Libraries}
+library(phyloseq)
+library(vegan)  # For decostand function (optional)
+library(ggplot2)
+library(reshape2)
+
+set.seed(81471438)
+```
+
+#Import
+```{r}
+#This will use objects generated in the "Swab Photo Score Analysis.Rmd" file. I do not have them saved as .RData objects
+
+#You will need the "physeq.bray.extremes" phyloseq object and the simper/kruskal wallace analysis outputs from the previous file.
+
+KW.Extremes = data.frame(read.csv("Color Extremes and taxonomy_krusk_simper.csv"))
+
+KW.Percentiles = data.frame(read.csv("Color Percentiles and taxonomy_krusk_simper.csv"))
+
+
+```
+
+#Charting the Extremes Group
+```{r}
+KW.Extremes.sub <- KW.Extremes[KW.Extremes$Comparison == "High_Low",]
+
+KW.Extremes.sub$YLabel <- paste0(KW.Extremes.sub$OTU, "; ", KW.Extremes.sub$Genus)
+
+KW.Extremes.sub$number <- gsub("ASV", "", KW.Extremes.sub$OTU)
+
+KW.Extremes.sub <- KW.Extremes.sub[order(as.numeric(KW.Extremes.sub$number)),]
+
+ASV.Extremes <- KW.Extremes.sub$OTU
+
+physeq.extreme.merged <- merge_samples(physeq.bray.extremes, "Extremes")
+
+physeq.extreme.merged.rel <- transform_sample_counts(physeq.extreme.merged, function(x) x/sum(x))
+
+physeq.trim <- subset_taxa(physeq.extreme.merged.rel, taxa_names(physeq.extreme.merged.rel) %in% ASV.Extremes)
+
+
+asv <- as.matrix(otu_table(physeq.trim))
+
+
+rel_abundance_df <- as.data.frame(asv)
+
+
+rel_abundance_df$Sample <- rownames(rel_abundance_df)
+rel_abundance_melted <- melt(rel_abundance_df, id.vars = "Sample")
+
+rel_abundance_melted$Sample <- factor(rel_abundance_melted$Sample, levels = c("Low", "Mid", "High", "Solid", "Liquid"))
+rel_abundance_melted$variable <- factor(rel_abundance_melted$variable, levels = c("ASV3", "ASV7", "ASV2", "ASV4", "ASV5", "ASV6", "ASV15", "ASV22", "ASV26"))
+
+y_labels <- c("ASV3; Succiniclasticum", "ASV7; Prevotella", "ASV2; Unclassified", "ASV4; Unclassified", "ASV5; Rothia", "ASV6; Streptococcus", "ASV15; Streptococcus", "ASV22; Bibersteinia", "ASV26; Moraxella")
+
+heatmap_plot_ext <- ggplot(rel_abundance_melted, aes(x = Sample, y = variable, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "blue") +  # Adjust color scale as needed
+  scale_y_discrete(labels = y_labels) +
+  labs(x = "Sample Group", y = "ASV", fill = "Relative Abundance") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) + # Rotate x-axis labels for better visibility
+  ggtitle("Relative Abundance of Significant Bacterial ASVs by Extremes")
+
+heatmap_plot_ext
+
+
+```
+
+
+#Charting the Percentiles Group
+```{r}
+KW.Percentiles.sub <- KW.Percentiles[KW.Percentiles$Comparison == " 1_10",]
+
+KW.Percentiles.sub$YLabel <- paste0(KW.Percentiles.sub$OTU, "; ", KW.Percentiles.sub$Genus)
+
+ASV.Percentiles <- KW.Percentiles.sub$OTU
+
+physeq.percentile.merged <- merge_samples(physeq.swab1.abund, "PercentileName")
+
+physeq.percentile.merged.rel <- transform_sample_counts(physeq.percentile.merged, function(x) x/sum(x))
+
+physeq.per.trim <- subset_taxa(physeq.percentile.merged.rel, taxa_names(physeq.percentile.merged.rel) %in% ASV.Percentiles)
+
+
+asv <- as.matrix(otu_table(physeq.per.trim))
+
+
+rel_abundance_df <- as.data.frame(asv)
+
+
+rel_abundance_df$Sample <- rownames(rel_abundance_df)
+rel_abundance_melted <- melt(rel_abundance_df, id.vars = "Sample")
+
+y_labels <- c("ASV1; Succinivibrionaceae UCG-001", "ASV3; Succiniclasticum", "ASV7; Prevotella", "ASV2; Unclassified", "ASV4; Unclassified", "ASV5; Rothia", "ASV6; Streptococcus", "ASV8; Bibersteinia", "ASV11; Streptococcus", "ASV12; Alysiella", "ASV15; Streptococcus", "ASV22; Bibersteinia", "ASV25; Bibersteinia")
+
+rel_abundance_melted$Sample <- factor(rel_abundance_melted$Sample, levels = c("Ten", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety", "Hundred", "RL", "RS"))
+rel_abundance_melted$variable <- factor(rel_abundance_melted$variable, levels = c("ASV1", "ASV3", "ASV7", "ASV2", "ASV4", "ASV5", "ASV6", "ASV8", "ASV11", "ASV12", "ASV15", "ASV22", "ASV25"))
+
+
+heatmap_plot_per <- ggplot(rel_abundance_melted, aes(x = Sample, y = variable, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "blue") +  # Adjust color scale as needed
+  labs(x = "Sample Group", y = "ASV", fill = "Relative Abundance") +
+  scale_y_discrete(labels = y_labels) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) + # Rotate x-axis labels for better visibility
+  ggtitle("Relative Abundance of Significant Bacterial ASVs by Percentiles")
+
+heatmap_plot_per
+
+grid.arrange(heatmap_plot_ext, heatmap_plot_per, ncol = 2)
+
+```
+
+
+
+
+
+
+
+

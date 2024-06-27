@@ -1,0 +1,1174 @@
+---
+title: "Comparing colors of swabs based on a colorimetric score - BACTERIAL"
+author: "Skarlupka"
+date: '2024-04-22'
+output: html_document
+---
+
+#Intro
+```{r}
+#The goal is to determine if we can use the color of the swab to determine "quality" of the microbial community characterization, and to determine if the distribution of the color scores differ between the high and low efficiency groups.
+
+#Will look at alpha diversity, beta diversity, and determine what microbes may be driving the differences between the ranks of colors.
+
+```
+
+#Set working directory
+```{r}
+
+setwd("Address to Working Directory")
+
+```
+
+#Loading Libraries
+```{r, Libraries}
+library("ggplot2")
+library("phyloseq")
+library("vegan")
+library("DESeq2")
+library("reltools")
+library("phylosmith")
+library("gridExtra")
+
+set.seed(81471438)
+```
+
+#Importing files of interest
+```{r, Import the phyloseq object "physeq.RData"}
+
+load("address to phyloseq object")
+
+
+```
+
+
+#Creating a column to put a score for the rumen samples in place of NA
+```{r}
+#Rumen Liquid = 4
+#Rumen Solid = 5
+
+sample_data(physeq)$Tube.Color <- ifelse(sample_data(physeq)$Sample.Type == "Liquid", 4, ifelse(sample_data(physeq)$Sample.Type == "Solid", 5, sample_data(physeq)$Tube.Color))
+
+sample_data(physeq)$ColorYesNo <- ifelse(sample_data(physeq)$Swab_Rumen == "Rumen", "Yes", ifelse(is.na(sample_data(physeq)$Darkness), "No", "Yes"))
+
+sample_data(physeq)$Darkness <- ifelse(sample_data(physeq)$Swab_Rumen == "Rumen", 1, sample_data(physeq)$Darkness)
+
+physeq <- subset_samples(physeq, !is.na(sample_data(physeq)$Darkness))
+nsamples(physeq)
+#421 samples - removed 6 samples
+
+
+meta <- sample_data(physeq)
+meta <- as.matrix(meta)
+meta <- as.data.frame(meta)
+
+meta$Darkness <- as.numeric(meta$Darkness)
+
+meta.swab <- meta[meta$Swab_Rumen == "Swab",]
+scores <- meta.swab$Darkness
+scores <- scores[order(scores)]
+len <- length(scores)
+
+ten <- scores[len*.1] 
+twenty <- scores[len*.2] 
+thirty <- scores[len*.3] 
+forty <- scores[len*.4] 
+fifty <- scores[len*.5] 
+sixty <- scores[len*.6] 
+seventy <- scores[len*.7] 
+eighty <- scores[len*.8] 
+ninety <- scores[len*.9] 
+
+meta$Percentile <- ifelse(meta$Darkness < ten, 1, ifelse((meta$Darkness >= ten & meta$Darkness < twenty), 2, ifelse((meta$Darkness >= twenty & meta$Darkness < thirty), 3, ifelse((meta$Darkness >= thirty & meta$Darkness < forty), 4, ifelse((meta$Darkness >= forty & meta$Darkness < fifty), 5, ifelse((meta$Darkness >= fifty & meta$Darkness < sixty), 6, ifelse((meta$Darkness >= sixty & meta$Darkness < seventy), 7, ifelse((meta$Darkness >= seventy & meta$Darkness < eighty), 8, ifelse((meta$Darkness >= eighty & meta$Darkness < ninety), 9, 10)))))))))
+
+meta$PercentileName <- ifelse(meta$Darkness < ten, "Ten", ifelse((meta$Darkness >= ten & meta$Darkness < twenty), "Twenty", ifelse((meta$Darkness >= twenty & meta$Darkness < thirty), "Thirty", ifelse((meta$Darkness >= thirty & meta$Darkness < forty), "Forty", ifelse((meta$Darkness >= forty & meta$Darkness < fifty), "Fifty", ifelse((meta$Darkness >= fifty & meta$Darkness < sixty), "Sixty", ifelse((meta$Darkness >= sixty & meta$Darkness < seventy), "Seventy", ifelse((meta$Darkness >= seventy & meta$Darkness < eighty), "Eighty", ifelse((meta$Darkness >= eighty & meta$Darkness < ninety), "Ninety", "Hundred")))))))))
+
+meta$Percentile <- ifelse(meta$Sample.Type == "Liquid", 11, ifelse(meta$Sample.Type == "Solid", 12, meta$Percentile))
+
+meta$PercentileName <- ifelse(meta$Sample.Type == "Liquid", "RL", ifelse(meta$Sample.Type == "Solid", "RS", meta$PercentileName))
+
+
+
+meta$Extremes <- ifelse(meta$Darkness < scores[13], "Low", ifelse((meta$Swab_Rumen == "Swab" & meta$Darkness > scores[len-13]), "High", ifelse((meta$Darkness > scores[198] & meta$Darkness < scores [211]), "Mid", NA)))
+
+meta$Extremes <- ifelse(meta$Sample.Type == "Liquid", "Liquid", ifelse(meta$Sample.Type == "Solid", "Solid", meta$Extremes))
+
+meta$Extremes <- ifelse(is.na(meta$Extremes), "Other", meta$Extremes)
+
+sample_data(physeq) <- sample_data(meta)
+
+rm(list=c("meta.swab", "meta", "eighty", "forty", "fifty", "ten", "twenty", "thirty", "sixty", "seventy", "ninety", "scores", "len"))
+```
+
+
+#Rarefying the phyloseq object
+```{r}
+rowSums(otu_table(physeq))
+
+#Rarefying
+physeq.swab1.rare <- rarefy_even_depth(physeq, sample.size=7000)
+nsamples(physeq.swab1.rare)
+#7000 - 32 samples removed; 389 samples left
+
+
+tab <- otu_table(physeq.swab1.rare)
+class(tab) <- "matrix"
+#rarecurve(tab, step=50, cex=0.5, xlim=c(0,15000), ylim=c(0,2000))
+rm(tab)
+
+#Pulling back out the rarefied ASV table with new column names
+ASV1 = as(otu_table(physeq.swab1.rare), "matrix")
+if(taxa_are_rows(physeq.swab1.rare)){ASV1 <- t(ASV1)}
+# Coerce to data.frame
+ASV.7000 = as.data.frame(ASV1)
+rm(ASV1)
+
+
+#Pulling back out the metadata table with new column names
+meta.7000 = as(sample_data(physeq.swab1.rare), "matrix")
+# Coerce to data.frame
+meta.7000 = as.data.frame(meta.7000)
+
+
+#Pulling out new taxonomy file
+tax.7000 = as(tax_table(physeq.swab1.rare), "matrix")
+tax.7000 = as.data.frame(tax.7000)
+
+```
+
+
+##Abundance Cutoff of Phyloseq Object
+```{r}
+#Removing ASVs from which there are no samples with more than 10 sequences
+physeq.swab1.abund <- prune_taxa(taxa_sums(physeq.swab1.rare)>10,physeq.swab1.rare)
+
+#putting all metrics into a file
+div <- phyloseq::estimate_richness(physeq.swab1.abund, measures=c("Observed", "Chao1", "ACE", "Shannon", "InvSimpson", "Simpson"))
+row.names(div) <- gsub(".", "-", row.names(div), fixed=TRUE)
+row.names(div) <- gsub("X", "", row.names(div), fixed=TRUE)
+physeq.swab1.abund <- merge_phyloseq(physeq.swab1.abund, sample_data(div))
+
+rm(list=c("div"))
+
+```
+
+
+##Pulling out the ASV, Meta, and Taxonomy of the rarefied and abundance cutoff phyloseq object
+```{r}
+#Pulling back out the rarefied ASV table with new column names
+ASV1 = as(otu_table(physeq.swab1.abund), "matrix")
+if(taxa_are_rows(physeq.swab1.abund)){ASV1 <- t(ASV1)}
+# Coerce to data.frame
+ASV.rare.abund = as.data.frame(ASV1)
+rm(ASV1)
+
+
+#Pulling back out the metadata table with new column names
+meta.rare.abund = as(sample_data(physeq.swab1.abund), "matrix")
+# Coerce to data.frame
+meta.rare.abund = as.data.frame(meta.rare.abund)
+
+
+#Pulling out new taxonomy file
+tax.rare.abund = as(tax_table(physeq.swab1.abund), "matrix")
+tax.rare.abund = as.data.frame(tax.rare.abund)
+
+```
+
+
+##Creating a phyloseq object of that includes an abundance cutoff, but no rarefaction
+```{r}
+#Removing ASVs from which there are no samples with more than 10 sequences
+
+physeq.norare.abund <- prune_taxa(taxa_sums(physeq)>10,physeq)
+
+
+```
+
+
+#Exploring Alpha Diversity for GFE and RFI
+```{r, Exploring alpha diversity of the efficiency groups when split into top and bottom 20% by GFE}
+plot_richness(physeq.swab, "Darkness", measures="Shannon")
+
+#Testing normality
+shapiro.test(sample_data(physeq.swab)$Shannon)
+#Not normal - pvalue < 0.05
+shapiro.test(sample_data(physeq.swab)$Chao1)
+#Not normal - pvalue < 0.05
+shapiro.test(sample_data(physeq.swab)$ACE)
+#Not normal - pvalue < 0.05
+shapiro.test(sample_data(physeq.swab)$Simpson)
+#Not normal - pvalue < 0.05
+shapiro.test(sample_data(physeq.swab)$InvSimpson)
+#Not normal - pvalue < 0.05
+shapiro.test(sample_data(physeq.swab)$Observed)
+#Not normal - pvalue < 0.05
+```
+
+
+#Histogram of darkness scores
+```{r}
+par(mfrow = c(1, 1))
+
+hist(sample_data(physeq.swab)$Darkness, main="Darkness Scores", xlab="", breaks=10)
+shapiro.test(sample_data(physeq.swab)$Darkness)
+#Not normally distributed
+
+```
+
+
+#Trimming out the "Other" samples
+```{r}
+physeq.swab1.abund.trim <- subset_samples(physeq.swab1.abund, Extremes != "Other")
+
+
+```
+
+
+#Shannon
+```{r}
+sample_data(physeq.swab1.abund)$Percentile <- factor(sample_data(physeq.swab1.abund)$Percentile, levels = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))
+sample_data(physeq.swab1.abund)$PercentileName <- factor(sample_data(physeq.swab1.abund)$PercentileName, levels = c("Ten", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety", "Hundred", "RL", "RS"))
+
+sample_data(physeq.swab1.abund.trim)$Extremes <- factor(sample_data(physeq.swab1.abund.trim)$Extremes, levels = c("Low", "Mid", "High", "Liquid", "Solid")) #Percentiles
+
+#None of the metrics are normally distributed. Using Kruskal-Wallis test, then testing pairwise with Wilcoxon Rank Sum test.
+kruskal.test(Shannon ~ Percentile, data=as.matrix(sample_data(physeq.swab1.abund)))
+# pvalue < 0.05, sig difference
+pairwise.wilcox.test(sample_data(physeq.swab1.abund)$Shannon, sample_data(physeq.swab1.abund)$Percentile, p.adjust.method="fdr")
+#    1       2       3       4       5       6       7       8       9       10      11     
+# 2  0.74512 -       -       -       -       -       -       -       -       -       -      
+# 3  0.60262 0.97364 -       -       -       -       -       -       -       -       -      
+# 4  0.67069 0.45463 0.35048 -       -       -       -       -       -       -       -      
+# 5  0.74875 0.94043 0.67202 0.45463 -       -       -       -       -       -       -      
+# 6  0.06946 0.02314 0.02374 0.23942 0.03156 -       -       -       -       -       -      
+# 7  0.71313 0.50967 0.56913 0.99553 0.61904 0.24340 -       -       -       -       -      
+# 8  0.50967 0.31948 0.21866 0.90014 0.54659 0.28054 0.71824 -       -       -       -      
+# 9  0.01177 0.00167 0.00167 0.04566 0.00335 0.48886 0.04472 0.04000 -       -       -      
+# 10 0.00101 7.9e-05 7.9e-05 0.00470 1.4e-05 0.18907 0.01443 0.00310 0.51701 -       -      
+# 11 0.00097 0.00019 0.00030 0.00327 8.5e-05 0.07960 0.01431 0.00254 0.26036 0.46099 -      
+# 12 1.7e-06 2.1e-07 9.9e-06 9.9e-06 4.8e-07 0.00030 6.3e-05 7.6e-06 0.00136 0.00097 0.01508
+
+p1 <- ggplot(sample_data(physeq.swab1.abund), aes(x=PercentileName, y=Shannon)) + 
+  geom_boxplot() +
+  labs(title=,x="Swab Color Tenth Percentiles", y = " Bacterial Shannon Diversity") + 
+  theme(axis.text=element_text(size=12)) +  
+  ylim(2.25, 7.5)
+p1
+
+
+#Extremes
+kruskal.test(Shannon ~ Extremes, data=as.matrix(sample_data(physeq.swab1.abund.trim)))
+# pvalue < 0.05, sig difference
+pairwise.wilcox.test(sample_data(physeq.swab1.abund.trim)$Shannon, sample_data(physeq.swab1.abund.trim)$Extremes, p.adjust.method="fdr")
+#        Low     Mid     High    Liquid  Solid  
+# Mid    0.84284 -       -       -       -      
+# High   0.36817 0.22781 -       -       -      
+# Liquid 0.22769 0.22769 0.84284 -       -      
+# Solid  0.00037 0.01091 0.01710 0.01657 -      
+# Other  0.36694 0.84284 0.00668 0.00249 1.4e-05
+
+p2 <- ggplot(sample_data(physeq.swab1.abund.trim), aes(x=Extremes, y=Shannon)) + 
+  geom_boxplot() +
+  labs(title=,x="Swab Color Extremes", y = "Bacterial Shannon Diversity") + 
+  theme(axis.text=element_text(size=12)) +  
+  ylim(2.25, 7.5)
+p2
+```
+
+#Chao
+```{r}
+#None of the metrics are normally distributed. Using Kruskal-Wallis test, then testing pairwise with Wilcoxon Rank Sum test.
+kruskal.test(Chao1 ~ Percentile, data=as.matrix(sample_data(physeq.swab1.abund)))
+# pvalue < 0.05, sig difference
+pairwise.wilcox.test(sample_data(physeq.swab1.abund)$Chao1, sample_data(physeq.swab1.abund)$Percentile, p.adjust.method="fdr")
+#   1       2       3       4       5       6       7       8       9       10      11     
+# 2  0.93665 -       -       -       -       -       -       -       -       -       -      
+# 3  0.47390 0.61169 -       -       -       -       -       -       -       -       -      
+# 4  0.65631 0.74324 0.27057 -       -       -       -       -       -       -       -      
+# 5  0.44179 0.58256 0.92108 0.26751 -       -       -       -       -       -       -      
+# 6  0.10144 0.19528 0.02466 0.35766 0.01562 -       -       -       -       -       -      
+# 7  0.72524 0.72448 0.28692 0.98659 0.25601 0.37565 -       -       -       -       -      
+# 8  0.53939 0.47526 0.11136 0.83457 0.10659 0.37565 0.72524 -       -       -       -      
+# 9  0.06517 0.10144 0.00840 0.18376 0.00379 0.82155 0.19767 0.35766 -       -       -      
+# 10 0.00037 0.00151 4.6e-05 0.00656 2.9e-05 0.06517 0.00796 0.00596 0.09803 -       -      
+# 11 0.00184 0.02118 0.00093 0.04636 0.00013 0.11136 0.04636 0.01524 0.10659 0.94784 -      
+# 12 1.4e-07 4.6e-05 3.1e-06 6.4e-05 1.4e-07 0.00010 0.00037 2.0e-05 4.6e-05 0.02910 0.00294
+
+p3 <- ggplot(sample_data(physeq.swab1.abund), aes(x=PercentileName, y=Chao1)) + 
+  geom_boxplot() +
+  labs(title=,x="Swab Color Tenth Percentiles", y = "Bacterial Chao Richness") + 
+  theme(axis.text=element_text(size=12)) +  
+  ylim(0, 2200)
+p3
+
+
+#Extremes
+kruskal.test(Chao1 ~ Extremes, data=as.matrix(sample_data(physeq.swab1.abund.trim)))
+# pvalue < 0.05, sig difference
+pairwise.wilcox.test(sample_data(physeq.swab1.abund.trim)$Chao1, sample_data(physeq.swab1.abund.trim)$Extremes, p.adjust.method="fdr")
+#        Low     Mid     High    Liquid  Solid  
+# Mid    0.88739 -       -       -       -      
+# High   0.14460 0.14407 -       -       -      
+# Liquid 0.14646 0.22957 0.65772 -       -      
+# Solid  0.00017 0.00909 0.12788 0.00899 -      
+# Other  0.27425 0.65772 0.00266 0.00344 1.7e-05
+
+p4 <- ggplot(sample_data(physeq.swab1.abund.trim), aes(x=Extremes, y=Chao1)) + 
+  geom_boxplot() +
+  labs(title=,x="Swab Color Extremes", y = "Bacterial Chao Richness") + 
+  theme(axis.text=element_text(size=12)) +  
+  ylim(0, 2200)
+p4
+```
+
+
+#Inverse Simpson
+```{r}
+#None of the metrics are normally distributed. Using Kruskal-Wallis test, then testing pairwise with Wilcoxon Rank Sum test.
+kruskal.test(InvSimpson ~ Percentile, data=as.matrix(sample_data(physeq.swab1.abund)))
+# pvalue < 0.05, sig difference
+pairwise.wilcox.test(sample_data(physeq.swab1.abund)$InvSimpson, sample_data(physeq.swab1.abund)$Percentile, p.adjust.method="fdr")
+#    1       2       3       4       5       6       7       8       9       10      11     
+# 2  0.70795 -       -       -       -       -       -       -       -       -       -      
+# 3  0.80190 0.97203 -       -       -       -       -       -       -       -       -      
+# 4  0.88413 0.54461 0.61255 -       -       -       -       -       -       -       -      
+# 5  0.61255 0.88302 0.97203 0.50681 -       -       -       -       -       -       -      
+# 6  0.13276 0.03823 0.09743 0.24422 0.03879 -       -       -       -       -       -      
+# 7  0.88302 0.56289 0.61255 0.94017 0.49076 0.26960 -       -       -       -       -      
+# 8  0.97019 0.63287 0.79562 0.88302 0.63287 0.14012 0.88302 -       -       -       -      
+# 9  0.01014 0.00140 0.00374 0.02067 0.00089 0.26121 0.03548 0.00635 -       -       -      
+# 10 0.02067 0.00307 0.00669 0.03823 0.00200 0.50681 0.08141 0.02067 0.80190 -       -      
+# 11 0.00133 0.00017 0.00082 0.00290 0.00010 0.03330 0.00903 0.00082 0.18800 0.11441 -      
+# 12 0.00017 2.3e-05 0.00016 0.00017 2.3e-05 0.00290 0.00089 0.00010 0.02699 0.01014 0.45208
+
+p5 <- ggplot(sample_data(physeq.swab1.abund), aes(x=PercentileName, y=InvSimpson)) + 
+  geom_boxplot() +
+  labs(title=,x="Swab Color Tenth Percentiles", y = "Bacterial Inverse Simpson") + 
+  theme(axis.text=element_text(size=12)) +  
+  ylim(0, 250)
+p5
+
+
+#Extremes
+kruskal.test(InvSimpson ~ Extremes, data=as.matrix(sample_data(physeq.swab1.abund.trim)))
+# pvalue < 0.05, sig difference
+pairwise.wilcox.test(sample_data(physeq.swab1.abund.trim)$InvSimpson, sample_data(physeq.swab1.abund.trim)$Extremes, p.adjust.method="fdr")
+#        Low     Mid     High    Liquid  Solid  
+# Mid    0.72661 -       -       -       -      
+# High   0.77227 0.40040 -       -       -      
+# Liquid 0.16268 0.06417 0.27853 -       -      
+# Solid  0.03767 0.02257 0.05635 0.40040 -      
+# Other  0.22878 0.77227 0.16268 0.00177 0.00024
+
+p6 <- ggplot(sample_data(physeq.swab1.abund.trim), aes(x=Extremes, y=InvSimpson)) + 
+  geom_boxplot() +
+  labs(title=,x="Swab Color Extremes", y = "Bacterial Inverse Simpson") + 
+  theme(axis.text=element_text(size=12)) +  
+  ylim(0, 250)
+p6
+
+
+#Summary: Swab color is indicative of a significant difference between the alpha diversity scores of the bacterial communities. Next is to see if the overall structure of these communities is also significantly different and what are the microbes driving those differences.
+
+```
+
+
+#Plotting alpha diversity metrics
+```{r}
+library(gridExtra)
+combined_plots <- grid.arrange(p1, p2, p3, p4, p5, p6, ncol = 2)
+
+
+```
+
+
+
+#Plotting the alpha diversity scores based on the darkness scores
+```{r}
+physeq.swab1 <- subset_samples(physeq.swab1.abund, Swab_Rumen=="Swab")
+
+b_p7 <- ggplot(sample_data(physeq.swab1), aes(x = Darkness, y = Shannon)) +
+  geom_point() +  # Add points to the plot
+  geom_smooth(method = "lm", se = FALSE) +  # Add a line of best fit
+  labs(x = "Darkness Score", y = "Bacterial Shannon Diversity") +  # Add axis labels and title
+  theme_minimal()  # Optional: apply a minimal theme to the plot
+
+
+cor.test(sample_data(physeq.swab1)$Darkness, sample_data(physeq.swab1)$Shannon, method = "spearman")
+# data:  sample_data(physeq.swab1)$Darkness and sample_data(physeq.swab1)$Shannon
+# S = 5812753, p-value = 7.919e-08
+# alternative hypothesis: true rho is not equal to 0
+# sample estimates:
+#       rho 
+# 0.2768436
+
+cor.test(sample_data(physeq.swab1)$Darkness, sample_data(physeq.swab1)$Shannon, method = "kendall")
+# data:  sample_data(physeq.swab1)$Darkness and sample_data(physeq.swab1)$Shannon
+# z = 5.347, p-value = 8.944e-08
+# alternative hypothesis: true tau is not equal to 0
+# sample estimates:
+#       tau 
+# 0.1877408 
+
+
+b_p8 <- ggplot(sample_data(physeq.swab1), aes(x = Darkness, y = Chao1)) +
+  geom_point() +  # Add points to the plot
+  geom_smooth(method = "lm", se = FALSE) +  # Add a line of best fit
+  labs(x = "Darkness Score", y = "Bacterial Chao Richness") +  # Add axis labels and title
+  theme_minimal()  # Optional: apply a minimal theme to the plot
+
+
+cor.test(sample_data(physeq.swab1)$Darkness, sample_data(physeq.swab1)$Chao1, method = "spearman")
+# data:  sample_data(physeq.swab1)$Darkness and sample_data(physeq.swab1)$Chao1
+# S = 6043198, p-value = 1.637e-06
+# alternative hypothesis: true rho is not equal to 0
+# sample estimates:
+#       rho 
+# 0.2481743 
+
+cor.test(sample_data(physeq.swab1)$Darkness, sample_data(physeq.swab1)$Chao1, method = "kendall")
+# data:  sample_data(physeq.swab1)$Darkness and sample_data(physeq.swab1)$Chao1
+# z = 4.7667, p-value = 1.873e-06
+# alternative hypothesis: true tau is not equal to 0
+# sample estimates:
+#       tau 
+# 0.1673667 
+
+
+
+b_p9 <- ggplot(sample_data(physeq.swab1), aes(x = Darkness, y = InvSimpson)) +
+  geom_point() +  # Add points to the plot
+  geom_smooth(method = "lm", se = FALSE) +  # Add a line of best fit
+  labs(x = "Darkness Score", y = "Bacterial Inverse Simpson") +  # Add axis labels and title
+  theme_minimal()  # Optional: apply a minimal theme to the plot
+
+
+cor.test(sample_data(physeq.swab1)$Darkness, sample_data(physeq.swab1)$InvSimpson, method = "spearman")
+# data:  sample_data(physeq.swab1)$Darkness and sample_data(physeq.swab1)$InvSimpson
+# S = 6265786, p-value = 2.192e-05
+# alternative hypothesis: true rho is not equal to 0
+# sample estimates:
+#       rho 
+# 0.2204824 
+
+cor.test(sample_data(physeq.swab1)$Darkness, sample_data(physeq.swab1)$InvSimpson, method = "kendall")
+# data:  sample_data(physeq.swab1)$Darkness and sample_data(physeq.swab1)$InvSimpson
+# z = 4.1933, p-value = 2.749e-05
+# alternative hypothesis: true tau is not equal to 0
+# sample estimates:
+#       tau 
+# 0.1472349
+
+combined_plots_2 <- grid.arrange(b_p7, b_p8, b_p9, ncol = 3)
+
+```
+
+
+
+#Making bar charts for the structure of the community
+##Merge samples based on extremes and switch to relative abundance
+```{r}
+physeq.swab1.abund.2 <- subset_samples(physeq.swab1.abund, Extremes != "Other")
+
+physeq.tube.merged <- merge_samples(physeq.swab1.abund.2, "Extremes")
+
+physeq.tube.merged.relabund <- transform_sample_counts(physeq.tube.merged, function(x) x/sum(x))
+
+sample_data(physeq.tube.merged.relabund)$ExtremeGroup <- sample_names(physeq.tube.merged.relabund)
+
+sample_data(physeq.tube.merged.relabund)$ExtremeGroup <- factor(sample_data(physeq.tube.merged.relabund)$ExtremeGroup, levels = c("Low", "Mid", "High", "Liquid", "Solid"))
+
+
+##Top 25 Genera
+top25g.names = sort(tapply(taxa_sums(physeq.tube.merged.relabund), tax_table(physeq.tube.merged.relabund)[, "Genus"], sum), TRUE)[1:25]
+
+top25g = subset_taxa(physeq.tube.merged.relabund, Genus %in% names(top25g.names))
+
+sample_data(top25g)$ExtremeGroup <- sample_names(top25g)
+
+sample_data(top25g)$ExtremeGroup <- factor(sample_data(top25g)$ExtremeGroup, levels = c("Low", "Mid", "High", "Liquid", "Solid"))
+
+plot_bar(top25g, x="ExtremeGroup", fill="Genus", facet_grid = ~Genus) + geom_bar(aes(color=Genus, fill=Genus), stat="identity", position="stack") + ggtitle("Top 25 Genera by Swab Color or Rumen Type")
+
+
+##Top 10 Phyla
+
+top10p.names = sort(tapply(taxa_sums(physeq.tube.merged.relabund), tax_table(physeq.tube.merged.relabund)[, "Phylum"], sum), TRUE)[1:10]
+
+top10p = subset_taxa(physeq.tube.merged.relabund, Phylum %in% names(top10p.names))
+
+sample_data(top10p)$ExtremeGroup <- sample_names(top10p)
+
+sample_data(top10p)$ExtremeGroup <- factor(sample_data(top10p)$ExtremeGroup, levels = c("Low", "Mid", "High", "Liquid", "Solid"))
+
+bac_top10phyla_ex <- plot_bar(top10p, x="ExtremeGroup", fill="Phylum") + geom_bar(aes(color=Phylum, fill=Phylum), stat="identity", position="stack") + scale_x_discrete(limits=c("Low", "Mid", "High", "Liquid", "Solid")) + ggtitle("Top 10 Bacterial Phyla by Extremes")
+
+bac_top10phyla_ex
+
+```
+
+##Merge samples based on percentiles and switch to relative abundance
+```{r}
+physeq.swab1.abund.per <- physeq.swab1.abund
+
+sample_data(physeq.swab1.abund.per)$PercentileName <- as.character(sample_data(physeq.swab1.abund.per)$PercentileName)
+
+physeq.tube.merged <- merge_samples(physeq.swab1.abund.per, "PercentileName")
+
+physeq.tube.merged.relabund <- transform_sample_counts(physeq.tube.merged, function(x) x/sum(x))
+
+
+##Top 25 Genera
+top25g.names = sort(tapply(taxa_sums(physeq.tube.merged.relabund), tax_table(physeq.tube.merged.relabund)[, "Genus"], sum), TRUE)[1:25]
+
+top25g = subset_taxa(physeq.tube.merged.relabund, Genus %in% names(top25g.names))
+
+sample_data(top25g)$ExtremeGroup <- sample_names(top25g)
+
+sample_data(top25g)$Percentile <- factor(sample_data(top25g)$Percentile, levels = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))
+
+plot_bar(top25g, x="Percentile", fill="Genus", facet_grid = ~Genus) + geom_bar(aes(color=Genus, fill=Genus), stat="identity", position="stack") + ggtitle("Top 25 Genera by Swab Color or Rumen Type")
+
+
+##Top 10 Phyla
+
+top10p.names = sort(tapply(taxa_sums(physeq.tube.merged.relabund), tax_table(physeq.tube.merged.relabund)[, "Phylum"], sum), TRUE)[1:10]
+
+top10p = subset_taxa(physeq.tube.merged.relabund, Phylum %in% names(top10p.names))
+
+sample_data(top10p)$PercentileName <- sample_names(top10p)
+
+sample_data(top10p)$PercentileName <- factor(sample_data(top10p)$PercentileName, levels = c("Ten", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety", "Hundred", "RL", "RS"))
+
+bac_top10phyla_per <- plot_bar(top10p, x="PercentileName", fill="Phylum") + geom_bar(aes(color=Phylum, fill=Phylum), stat="identity", position="stack") + ggtitle("Top 10 Bacterial Phyla by Percentiles")
+
+bac_top10phyla_per
+
+grid.arrange(bac_top10phyla_ex, bac_top10phyla_per, ncol=2)
+
+```
+
+
+
+#Plotting
+```{r}
+
+#sample_data(physeq.swab1.abund)$Tube.Color <- as.character(sample_data(physeq.tube)$Tube.Color)
+
+# PCoA plot using bray-curtis as distance
+bray_dist = phyloseq::distance(physeq.swab1.abund, method="bray", weighted=F)
+ordination = ordinate(physeq.swab1.abund, method="PCoA", distance=bray_dist)
+
+physeq.bray.extremes <- subset_samples(physeq.swab1.abund, Extremes != "Other")
+
+
+#This command pulls out the PCoA coordinates
+ordstats <- plot_ordination(physeq.swab1.abund, ordination, color="Darkness", justDF=TRUE)
+
+#Filter out the "Other" samples from ordstats
+ordstats_extreme <- ordstats[ordstats$Extremes != "Other",]
+
+ordstats_extreme$Extremes <- factor(ordstats_extreme$Extremes, levels = c("Low", "Mid", "High", "Liquid", "Solid"))
+
+bac_pcoa_ex <- ggplot(ordstats_extreme, aes(x=Axis.1, y=Axis.2, color=Extremes)) + 
+  geom_point() +
+  stat_ellipse() +
+  xlab("Axis 1 [29.6%]") +
+  ylab("Axis 2 [6.8%]") +
+  ggtitle("Bray-Curtis PCoA by Extremes") +
+  coord_cartesian(xlim=c(-1, 1), ylim=c(-.5, .5))
+
+bac_pcoa_ex
+
+ordstats$PercentileName <- as.character(ordstats$PercentileName)
+ordstats$PercentileName <- factor(ordstats$PercentileName, levels = c("Ten", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety", "Hundred", "RL", "RS"))
+
+bac_pcoa_per <- ggplot(ordstats, aes(x=Axis.1, y=Axis.2, color=PercentileName)) + 
+  geom_point() +
+  stat_ellipse() +
+  xlab("Axis 1 [29.6%]") +
+  ylab("Axis 2 [6.8%]") +
+  ggtitle("Bray-Curtis PCoA by Percentile") +
+  coord_cartesian(xlim=c(-1, 1), ylim=c(-.5, .5))
+
+bac_pcoa_per
+
+grid.arrange(pcoa_ex, pcoa_per, ncol = 2)
+
+```
+
+
+#Testing the dispersions
+```{r}
+BC.dist <- vegdist(ASV.rare.abund, distance="bray")
+#Using ANOSIM between of the very different group sizes and dispersion
+anosim(BC.dist, meta.rare.abund$Percentile, permutations=1000)
+
+# Dissimilarity: bray 
+# 
+# ANOSIM statistic R: 0.1338 
+#       Significance: 0.000999 
+# 
+# Permutation: free
+# Number of permutations: 1000
+#The percentile the sample is in does have an effect on the structure of the community
+
+#Testing Beta-dispersion
+disp.color = betadisper(BC.dist, meta.rare.abund$Percentile)
+permutest(disp.color, pairwise=TRUE, permutations=1000)
+# Pairwise comparisons:
+# (Observed p-value below diagonal, permuted p-value above diagonal)
+#            1          2          3          4          5          6          7          8          9         10         11     12
+#  1            6.9630e-01 4.0460e-01 5.1548e-01 9.2807e-01 9.4406e-01 7.4625e-01 1.7782e-01 1.0000e+00 3.8961e-02 9.9900e-04 0.0010
+#  2 7.0837e-01            5.9041e-01 7.3826e-01 6.8332e-01 7.4525e-01 4.7952e-01 9.3906e-02 7.2727e-01 6.2937e-02 9.9900e-04 0.0010
+#  3 4.1191e-01 5.8447e-01            7.4525e-01 4.0859e-01 3.8362e-01 2.8072e-01 7.5924e-02 4.1758e-01 2.1279e-01 9.9900e-04 0.0010
+#  4 5.1254e-01 7.7143e-01 7.5006e-01            4.9750e-01 5.1848e-01 3.3067e-01 5.2947e-02 5.4545e-01 1.1189e-01 9.9900e-04 0.0010
+#  5 9.4950e-01 6.8060e-01 4.0420e-01 5.0184e-01            8.7712e-01 8.0320e-01 2.7373e-01 9.5504e-01 4.8951e-02 9.9900e-04 0.0010
+#  6 9.4744e-01 7.3536e-01 4.0799e-01 5.2034e-01 8.9766e-01            6.9630e-01 1.5784e-01 9.5305e-01 4.6953e-02 9.9900e-04 0.0010
+#  7 7.5021e-01 4.8991e-01 2.9099e-01 3.3623e-01 8.1543e-01 6.8250e-01            3.6464e-01 7.6024e-01 3.9960e-02 9.9900e-04 0.0010
+#  8 2.1114e-01 9.5849e-02 6.6886e-02 5.1751e-02 2.7629e-01 1.5405e-01 3.7411e-01            2.5974e-01 7.9920e-03 9.9900e-04 0.0010
+#  9 9.9953e-01 7.2741e-01 4.3408e-01 5.4189e-01 9.5279e-01 9.5102e-01 7.6737e-01 2.4659e-01            5.5944e-02 9.9900e-04 0.0010
+# 10 5.2600e-02 7.3851e-02 2.2937e-01 1.0588e-01 5.0219e-02 4.4585e-02 3.6550e-02 6.8807e-03 5.6694e-02            5.9940e-03 0.0040
+# 11 7.7089e-10 7.4742e-10 6.9013e-06 1.6465e-09 1.7168e-08 2.4998e-11 1.0967e-09 7.7848e-12 1.5836e-08 9.5439e-03            0.3347
+# 12 7.4785e-11 6.0379e-11 1.3136e-06 1.2824e-10 2.2876e-09 1.6322e-12 1.2620e-10 8.0725e-13 2.0605e-09 3.5324e-03 3.3639e-01       
+
+
+
+BC.dist <- vegdist(ASV.rare.abund, distance="bray")
+#Using ANOSIM between of the very different group sizes and dispersion
+anosim(BC.dist, meta.rare.abund$Percentile, permutations=1000)
+
+disp.color = betadisper(BC.dist, meta.rare.abund$Extremes)
+permutest(disp.color, pairwise=TRUE, permutations=1000)
+# Permutation test for homogeneity of multivariate dispersions
+# Permutation: free
+# Number of permutations: 1000
+# 
+# Response: Distances
+#            Df Sum Sq  Mean Sq      F N.Perm   Pr(>F)    
+# Groups      5 1.3178 0.263560 54.208   1000 0.000999 ***
+# Residuals 383 1.8622 0.004862                           
+# ---
+# Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+# 
+# Pairwise comparisons:
+# (Observed p-value below diagonal, permuted p-value above diagonal)
+#              High     Liquid        Low        Mid      Other  Solid
+# High              2.6973e-01 2.1978e-02 9.9900e-04 9.9900e-04 0.0460
+# Liquid 2.7485e-01            9.9900e-03 9.9900e-04 9.9900e-04 0.3267
+# Low    2.6407e-02 4.2551e-03            4.6553e-01 3.9960e-03 0.0020
+# Mid    6.6209e-05 9.2783e-07 4.5371e-01            1.1788e-01 0.0010
+# Other  6.0440e-17 3.3299e-22 2.3048e-03 1.3587e-01            0.0010
+# Solid  5.7981e-02 3.0834e-01 1.5456e-03 1.8902e-07 5.3932e-25      
+
+```
+
+
+
+
+
+##Linear modelling of GFE/RFI against PC1 axis
+```{r, Plotting the PCA axis 1 on y and GFE or RFI on x}
+
+ordstats_swabs <- ordstats[ordstats$Swab_Rumen == "Swab",]
+
+b_PC1 <- ggplot(ordstats_swabs, aes(Darkness, Axis.1), geom_smooth(method="lm", se=FALSE)) +
+    geom_point() +
+    geom_smooth(method="lm", se=FALSE) +
+    ggtitle("Darkness Score x Bacterial PC1")
+
+b_PC1
+
+lm_fit_GFE.PC1 <- lm(Darkness ~ Axis.1, data=ordstats_swabs)
+summary(lm_fit_GFE.PC1)
+# Call:
+# lm(formula = Darkness ~ Axis.1, data = ordstats_swabs)
+# 
+# Residuals:
+#      Min       1Q   Median       3Q      Max 
+# -0.09601 -0.03630 -0.01110  0.01834  0.26963 
+# 
+# Coefficients:
+#             Estimate Std. Error t value Pr(>|t|)    
+# (Intercept)  0.42693    0.00315 135.553   <2e-16 ***
+# Axis.1      -0.09242    0.01068  -8.658   <2e-16 ***
+# ---
+# Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+# 
+# Residual standard error: 0.05984 on 362 degrees of freedom
+# Multiple R-squared:  0.1715,	Adjusted R-squared:  0.1693 
+# F-statistic: 74.96 on 1 and 362 DF,  p-value: < 2.2e-16
+
+
+ggplot(ordstats_swabs, aes(Darkness, Axis.2), geom_smooth(method="lm", se=FALSE)) +
+    geom_point() +
+    geom_smooth(method="lm", se=FALSE) +
+    ggtitle("Darkness Score x PC2")
+
+lm_fit_GFE.PC2 <- lm(Darkness ~ Axis.2, data=ordstats_swabs)
+summary(lm_fit_GFE.PC2)
+# p > 0.05
+
+```
+
+
+
+```{r, Testing beta diversity - jaccard - pcoa}
+# PCoA plot using jaccard as distance
+jac_dist = phyloseq::distance(physeq.swab1.abund, method="jaccard", weighted=F)
+jac_ordination = ordinate(physeq.swab1.abund, method="PCoA", distance=jac_dist)
+
+physeq.bray.extremes <- subset_samples(physeq.swab1.abund, Extremes != "Other")
+
+jac_testplot <- plot_ordination(physeq.bray.extremes, jac_ordination, color="Tube.Color") + theme(aspect.ratio=1)
+jac_testplot
+
+#This command pulls out the PCoA coordinates
+jac_ordstats <- plot_ordination(physeq.swab1.abund, jac_ordination, color="Darkness", justDF=TRUE)
+
+#Filter out the "Other" samples from ordstats
+jac_ordstats_extreme <- jac_ordstats[jac_ordstats$Extremes != "Other",]
+
+jac_ordstats_extreme$Extremes <- factor(jac_ordstats_extreme$Extremes, levels = c("Low", "Mid", "High", "Liquid", "Solid"))
+
+jac_ex <- ggplot(jac_ordstats_extreme, aes(x=Axis.1, y=Axis.2, color=Extremes)) + 
+  geom_point() +
+  stat_ellipse() +
+  xlab("Axis 1 [17.9%]") +
+  ylab("Axis 2 [4.5%]") +
+  ggtitle("Bacterial Jaccard PCoA by Extremes") +
+  coord_cartesian(xlim=c(-1, 1), ylim=c(-.5, .5))
+
+jac_ex
+
+bac_jac_ex <- jac_ex
+
+jac_ordstats$Percentile <- as.character(jac_ordstats$Percentile)
+jac_ordstats$Percentile <- factor(jac_ordstats$Percentile, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"))
+
+jac_ordstats$PercentileName <- as.character(jac_ordstats$PercentileName)
+jac_ordstats$PercentileName <- factor(jac_ordstats$PercentileName, levels = c("Ten", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety", "Hundred", "RL", "RS"))
+
+
+
+jac_per <- ggplot(jac_ordstats, aes(x=Axis.1, y=Axis.2, color=PercentileName)) + 
+  geom_point() +
+  stat_ellipse() +
+  xlab("Axis 1 [17.9%]") +
+  ylab("Axis 2 [4.5%]") +
+  ggtitle("Jaccard PCoA by Percentile") +
+  coord_cartesian(xlim=c(-1, 1), ylim=c(-.5, .5))
+
+jac_per
+
+bac_jac_per <- jac_per
+
+grid.arrange(jac_ex, jac_per, ncol = 2)
+
+
+#########
+
+#Linear Modeling of axes against darkness
+jac_ordstats_swabs <- jac_ordstats[jac_ordstats$Swab_Rumen == "Swab",]
+
+b_PC1_jac <- ggplot(jac_ordstats_swabs, aes(Darkness, Axis.1), geom_smooth(method="lm", se=FALSE)) +
+    geom_point() +
+    geom_smooth(method="lm", se=FALSE) +
+    ggtitle("Darkness Score x PC1")
+
+b_PC1_jac
+
+lm_fit_GFE.PC1.jac <- lm(Darkness ~ Axis.1, data=jac_ordstats_swabs)
+summary(lm_fit_GFE.PC1.jac)
+# Call:
+# lm(formula = Darkness ~ Axis.1, data = jac_ordstats_swabs)
+# 
+# Residuals:
+#      Min       1Q   Median       3Q      Max 
+# -0.09841 -0.03761 -0.01111  0.01740  0.27098 
+# 
+# Coefficients:
+#             Estimate Std. Error t value Pr(>|t|)    
+# (Intercept)  0.42676    0.00316 135.072  < 2e-16 ***
+# Axis.1      -0.10523    0.01242  -8.476 5.97e-16 ***
+# ---
+# Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+# 
+# Residual standard error: 0.06006 on 362 degrees of freedom
+# Multiple R-squared:  0.1656,	Adjusted R-squared:  0.1633 
+# F-statistic: 71.84 on 1 and 362 DF,  p-value: 5.966e-16
+
+ggplot(jac_ordstats_swabs, aes(Darkness, Axis.2), geom_smooth(method="lm", se=FALSE)) +
+    geom_point() +
+    geom_smooth(method="lm", se=FALSE) +
+    ggtitle("Darkness Score x PC2")
+
+lm_fit_GFE.PC2 <- lm(Darkness ~ Axis.2, data=jac_ordstats_swabs)
+summary(lm_fit_GFE.PC2)
+# p > 0.05
+
+```
+
+
+```{r, Plotting based on unweighted unifrac}
+# PCoA plot using enweighted unifrac as distance
+uwu_dist = phyloseq::distance(physeq.swab1.abund, method="unifrac", weighted=F)
+uwu_ordination = ordinate(physeq.swab1.abund, method="PCoA", distance=uwu_dist)
+
+physeq.bray.extremes <- subset_samples(physeq.swab1.abund, Extremes != "Other")
+
+uwu_testplot <- plot_ordination(physeq.bray.extremes, uwu_ordination, color="Tube.Color") + theme(aspect.ratio=1)
+uwu_testplot
+
+#This command pulls out the PCoA coordinates
+uwu_ordstats <- plot_ordination(physeq.swab1.abund, uwu_ordination, color="Darkness", justDF=TRUE)
+
+#Filter out the "Other" samples from ordstats
+uwu_ordstats_extreme <- uwu_ordstats[uwu_ordstats$Extremes != "Other",]
+
+uwu_ordstats_extreme$Extremes <- factor(uwu_ordstats_extreme$Extremes, levels = c("Low", "Mid", "High", "Liquid", "Solid"))
+
+uwu_ex <- ggplot(uwu_ordstats_extreme, aes(x=Axis.1, y=Axis.2, color=Extremes)) + 
+  geom_point() +
+  stat_ellipse() +
+  xlab("Axis 1 [27.6%]") +
+  ylab("Axis 2 [4.1]") +
+  ggtitle("Unweighted Unifrac PCoA by Extremes") +
+  coord_cartesian(xlim=c(-1, 1), ylim=c(-.5, .5))
+
+uwu_ex
+
+bac_uwu_ex <- uwu_ex
+
+uwu_ordstats$Percentile <- as.character(uwu_ordstats$Percentile)
+uwu_ordstats$Percentile <- factor(uwu_ordstats$Percentile, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"))
+
+uwu_ordstats$PercentileName <- as.character(uwu_ordstats$PercentileName)
+uwu_ordstats$PercentileName <- factor(uwu_ordstats$PercentileName, levels = c("Ten", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety", "Hundred", "RL", "RS"))
+
+
+uwu_per <- ggplot(uwu_ordstats, aes(x=Axis.1, y=Axis.2, color=PercentileName)) + 
+  geom_point() +
+  stat_ellipse() +
+  xlab("Axis 1 [27.6%]") +
+  ylab("Axis 2 [4.1%]") +
+  ggtitle("Unweighted Unifrac PCoA by Percentile") +
+  coord_cartesian(xlim=c(-1, 1), ylim=c(-.5, .5))
+
+uwu_per
+
+bac_uwu_per <- uwu_per
+
+grid.arrange(uwu_ex, uwu_per, ncol = 2)
+
+
+#########
+
+#Linear Modeling of axes against darkness
+uwu_ordstats_swabs <- uwu_ordstats[uwu_ordstats$Swab_Rumen == "Swab",]
+
+b_PC1_uwu <- ggplot(uwu_ordstats_swabs, aes(Darkness, Axis.1), geom_smooth(method="lm", se=FALSE)) +
+    geom_point() +
+    geom_smooth(method="lm", se=FALSE) +
+    ggtitle("Darkness Score x PC1")
+
+b_PC1_uwu
+
+lm_fit_GFE.PC1.uwu <- lm(Darkness ~ Axis.1, data=uwu_ordstats_swabs)
+summary(lm_fit_GFE.PC1.uwu)
+# Call:
+# lm(formula = Darkness ~ Axis.1, data = uwu_ordstats_swabs)
+# 
+# Residuals:
+#      Min       1Q   Median       3Q      Max 
+# -0.08851 -0.03631 -0.01472  0.01311  0.28825 
+# 
+# Coefficients:
+#              Estimate Std. Error t value Pr(>|t|)    
+# (Intercept)  0.426101   0.003285 129.720  < 2e-16 ***
+# Axis.1      -0.086829   0.013906  -6.244  1.2e-09 ***
+# ---
+# Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+# 
+# Residual standard error: 0.06247 on 362 degrees of freedom
+# Multiple R-squared:  0.09723,	Adjusted R-squared:  0.09473 
+# F-statistic: 38.99 on 1 and 362 DF,  p-value: 1.196e-09
+
+ggplot(uwu_ordstats_swabs, aes(Darkness, Axis.2), geom_smooth(method="lm", se=FALSE)) +
+    geom_point() +
+    geom_smooth(method="lm", se=FALSE) +
+    ggtitle("Darkness Score x PC2")
+
+lm_fit_GFE.PC2 <- lm(Darkness ~ Axis.2, data=uwu_ordstats_swabs)
+summary(lm_fit_GFE.PC2)
+# p > 0.05
+
+```
+
+
+#Average distances of each point to either the rumen liquid or rumen solid groups
+##Generating the distances
+```{r}
+rumen_ord <- ordstats[ordstats$Swab_Rumen=="Rumen",]
+
+liquid_mean_x <- mean(ordstats[ordstats$Sample.Type=="Liquid",]$Axis.1)
+liquid_mean_y <- mean(ordstats[ordstats$Sample.Type=="Liquid",]$Axis.2)
+
+
+solid_mean_x <- mean(ordstats[ordstats$Sample.Type=="Solid",]$Axis.1)
+solid_mean_y <- mean(ordstats[ordstats$Sample.Type=="Solid",]$Axis.2)
+
+distances <- data.frame()
+
+len <- nrow(ordstats_swabs)
+
+for (i in 1:len) {
+  sample <- ordstats_swabs[i,]
+  
+  sample_name <- row.names(sample)
+
+    #Getting prevalence numbers
+  percent = sample$Percentile
+  percentname = sample$PercentileName
+  extreme = sample$Extremes
+  darkness = sample$Darkness
+  distance_liquid = sqrt((liquid_mean_x - sample$Axis.1)^2 + (liquid_mean_y - sample$Axis.2)^2)
+  distance_solid = sqrt((solid_mean_x - sample$Axis.1)^2 + (solid_mean_y - sample$Axis.2)^2)
+
+  df.temp = data.frame(Sample = c(sample_name), Percentile = c(percent), Extreme = c(extreme), Distance_Liquid = c(distance_liquid), Distance_Solid = c(distance_solid), Darkness = c(darkness), PercentileName = c(percentname))
+
+  distances = rbind(distances, df.temp)
+
+}
+
+distances$Extreme <- factor(distances$Extreme, levels = c("Low", "Mid", "High", "Other"))
+distances$Percentile <- factor(distances$Percentile, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"))
+distances$PercentileName <- factor(distances$PercentileName, levels = c("Ten", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety", "Hundred", "RL", "RS"))
+
+
+
+
+```
+
+##Analyzing distances for rumen liquid
+```{r}
+#Liquid / Percentiles
+b_p10 <- ggplot(distances, aes(x = PercentileName, y = Distance_Liquid)) +
+  geom_point() +  # Add points to the plot
+  geom_boxplot() +
+  geom_smooth(method = "lm", se = FALSE) +  # Add a line of best fit
+  labs(x = "Percentile Group", y = "Bacterial Distance to Liquids") +  # Add axis labels and title
+  theme_minimal() +  # Optional: apply a minimal theme to the plot
+  ylim(0, 1)
+  
+b_p10
+
+kruskal.test(Distance_Liquid ~ Percentile, data=distances)
+# pvalue < 0.05, sig difference
+pairwise.wilcox.test(distances$Distance_Liquid, distances$Percentile, p.adjust.method="fdr")
+#    1       2       3       4       5       6       7       8       9      
+# 2  0.63418 -       -       -       -       -       -       -       -      
+# 3  0.15115 0.45480 -       -       -       -       -       -       -      
+# 4  0.78383 0.48815 0.15293 -       -       -       -       -       -      
+# 5  0.85028 0.85774 0.32273 0.78383 -       -       -       -       -      
+# 6  0.45480 0.32273 0.08833 0.57801 0.40758 -       -       -       -      
+# 7  0.89093 0.87459 0.45480 0.68944 0.87882 0.32273 -       -       -      
+# 8  0.57801 0.32273 0.05100 0.68944 0.48815 0.85774 0.40758 -       -      
+# 9  0.16241 0.15344 0.05045 0.40758 0.28430 0.85422 0.15344 0.78383 -      
+# 10 4.6e-07 1.8e-06 4.6e-07 8.5e-06 1.5e-05 0.00372 1.1e-06 0.00042 0.00104
+
+
+#Liquid / Extremes
+b_p11 <- ggplot(distances, aes(x = Extreme, y = Distance_Liquid)) +
+  geom_point() +  # Add points to the plot
+  geom_boxplot() +
+  geom_smooth(method = "lm", se = FALSE) +  # Add a line of best fit
+  labs(x = "Extremes Group", y = "Bacterial Distance to Liquids") +  # Add axis labels and title
+  theme_minimal() +  # Optional: apply a minimal theme to the plot
+  ylim(0, 1)
+b_p11
+
+kruskal.test(Distance_Liquid ~ Extreme, data=distances)
+# pvalue < 0.05, sig difference
+pairwise.wilcox.test(distances$Distance_Liquid, distances$Extreme, p.adjust.method="fdr")
+#       Low     Mid   High   
+# Mid   0.616   -     -      
+# High  2.3e-06 0.006 -      
+# Other 0.616   0.743 9.6e-06
+
+
+```
+
+
+##Analyzing distances for rumen solid
+```{r}
+#Liquid / Percentiles
+b_p12 <- ggplot(distances, aes(x = PercentileName, y = Distance_Solid)) +
+  geom_point() +  # Add points to the plot
+  geom_boxplot() +
+  geom_smooth(method = "lm", se = FALSE) +  # Add a line of best fit
+  labs(x = "Percentile Group", y = "Bacterial Distance to Solids") +  # Add axis labels and title
+  theme_minimal() +  # Optional: apply a minimal theme to the plot
+  ylim(0,1)
+b_p12
+
+kruskal.test(Distance_Solid ~ PercentileName, data=distances)
+# pvalue < 0.05, sig difference
+pairwise.wilcox.test(distances$Distance_Solid, distances$Percentile, p.adjust.method="fdr")
+#    1       2       3       4       5       6       7       8       9      
+# 2  0.62900 -       -       -       -       -       -       -       -      
+# 3  0.16917 0.44653 -       -       -       -       -       -       -      
+# 4  0.72194 0.48095 0.12768 -       -       -       -       -       -      
+# 5  0.83677 0.95282 0.33310 0.62900 -       -       -       -       -      
+# 6  0.37777 0.33302 0.07090 0.62900 0.35650 -       -       -       -      
+# 7  0.95282 0.77693 0.37777 0.72194 0.95282 0.48095 -       -       -      
+# 8  0.48095 0.31255 0.02796 0.62900 0.36880 0.95286 0.44653 -       -      
+# 9  0.17117 0.14399 0.03070 0.37777 0.14399 0.62900 0.29986 0.72194 -      
+# 10 6.5e-08 2.6e-07 4.2e-08 1.5e-06 6.5e-08 5.3e-05 1.2e-05 0.00021 0.00174
+
+#Liquid / Extremes
+b_p13 <- ggplot(distances, aes(x = Extreme, y = Distance_Solid)) +
+  geom_point() +  # Add points to the plot
+  geom_boxplot() +
+  geom_smooth(method = "lm", se = FALSE) +  # Add a line of best fit
+  labs(x = "Extremes Group", y = "Bacterial Distance to Solids") +  # Add axis labels and title
+  theme_minimal() +  # Optional: apply a minimal theme to the plot
+  ylim(0,1)
+  
+b_p13
+
+kruskal.test(Distance_Solid ~ Extreme, data=distances)
+# pvalue < 0.05, sig difference
+pairwise.wilcox.test(distances$Distance_Solid, distances$Extreme, p.adjust.method="fdr")
+#       Low     Mid     High   
+# Mid   0.70785 -       -      
+# High  1.2e-06 0.00029 -      
+# Other 0.66796 0.83021 5.1e-07
+
+
+combined_plots_3 <- grid.arrange(b_p10, b_p11, b_p12, b_p13, ncol = 2)
+
+```
+
+
+#Correlation analysis of distances to darkness scores
+```{r}
+b_p14 <- ggplot(distances, aes(x = Darkness, y = Distance_Liquid)) +
+  geom_point() +  # Add points to the plot
+  geom_smooth(method = "lm", se = FALSE) +  # Add a line of best fit
+  labs(x = "Darkness Score", y = "Distance to Liquid", title = "Darkness x Bacterial Distance to Rumen Liquids") +  # Add axis labels and title
+  theme_minimal()  # Optional: apply a minimal theme to the plot
+b_p14
+
+cor.test(distances$Darkness, distances$Distance_Liquid, method = "spearman")
+# S = 10371982, p-value = 1.673e-08
+
+cor.test(distances$Darkness, distances$Distance_Liquid, method = "kendall")
+# z = -5.5116, p-value = 3.555e-08
+
+
+
+b_p15 <- ggplot(distances, aes(x = Darkness, y = Distance_Solid)) +
+  geom_point() +  # Add points to the plot
+  geom_smooth(method = "lm", se = FALSE) +  # Add a line of best fit
+  labs(x = "Darkness Score", y = "Distance to Solid", title = "Darkness x Bacterial Distance to Rumen Solids") +  # Add axis labels and title
+  theme_minimal()  # Optional: apply a minimal theme to the plot
+b_p15
+
+cor.test(distances$Darkness, distances$Distance_Solid, method = "spearman")
+# S = 10531943, p-value = 1.457e-09
+
+cor.test(distances$Darkness, distances$Distance_Solid, method = "kendall")
+# z = -5.9048, p-value = 3.531e-09
+
+
+```
+
+
+#Simper and Kruskal-Wallis Testing for Percentile Groups
+```{r}
+#Loading functions from https://github.com/asteinberger9/seq_scripts/blob/master/simper_pretty.R
+
+#What ASVs are driving the differences between the groups?
+meta.rare.abund$Percentile <- as.character(meta.rare.abund$Percentile)
+
+simper.pretty(ASV.rare.abund, meta.rare.abund, c('Percentile'), perc_cutoff=1, low_cutoff = 'y', low_val=0.01, 'Color Percentiles')
+
+simper.results = data.frame(read.csv("Color Percentiles_clean_simper.csv"))
+kruskal.pretty(ASV.rare.abund, meta.rare.abund, simper.results, c('Percentile'), 'Color Percentiles', tax.rare.abund)
+
+
+#Import
+KW.results = data.frame(read.csv("Color Percentiles_krusk_simper.csv"))
+#Remove non-significant
+KW.results.signif = KW.results[KW.results$fdr_krusk_p.val < 0.05,]
+#Order by ASV#
+#KW.results.signif = KW.results.signif[with(KW.results.signif, order(OTU)),]
+head(KW.results.signif)
+
+#Adding taxonomy info to the kruskal wallace file
+
+KW.results = data.frame(read.csv("Color Percentiles_krusk_simper.csv"))
+
+KW.results.signif = KW.results[KW.results$fdr_krusk_p.val < 0.05,]
+
+taxonomy <- tax.rare.abund
+taxonomy$OTU <- row.names(taxonomy)
+
+merged_df <- left_join(KW.results.signif, taxonomy, by = "OTU")
+merged_df_2 <- merged_df %>% select(-Taxonomy)
+merged_df_2 <- merged_df_2 %>% select(-X)
+
+write.csv(merged_df_2, file="Color Percentiles and taxonomy_krusk_simper.csv")
+
+
+rm(list=c("merged_df", "merged_df_2"))
+```
+
+
+#Simper and Kruskal-Wallis Testing for Extremes Groups
+```{r}
+#Loading functions from https://github.com/asteinberger9/seq_scripts/blob/master/simper_pretty.R
+
+#What ASVs are driving the differences between the groups?
+meta.rare.abund$Extremes <- ifelse(is.na(meta.rare.abund$Extremes), "Other", meta.rare.abund$Extremes)
+
+simper.pretty(ASV.rare.abund, meta.rare.abund, c('Extremes'), perc_cutoff=1, low_cutoff = 'y', low_val=0.01, 'Color Extremes')
+
+simper.results = data.frame(read.csv("Color Extremes_clean_simper.csv"))
+kruskal.pretty(ASV.rare.abund, meta.rare.abund, simper.results, c('Extremes'), 'Color Extremes', tax.rare.abund)
+
+
+#Import
+KW.results = data.frame(read.csv("Color Extremes_krusk_simper.csv"))
+#Remove non-significant
+KW.results.signif = KW.results[KW.results$fdr_krusk_p.val < 0.05,]
+#Order by ASV#
+#KW.results.signif = KW.results.signif[with(KW.results.signif, order(OTU)),]
+head(KW.results.signif)
+
+#Adding taxonomy info to the kruskal wallace file
+
+KW.results = data.frame(read.csv("Color Extremes_krusk_simper.csv"))
+
+KW.results.signif = KW.results[KW.results$fdr_krusk_p.val < 0.05,]
+
+taxonomy <- tax.rare.abund
+taxonomy$OTU <- row.names(taxonomy)
+
+merged_df <- left_join(KW.results.signif, taxonomy, by = "OTU")
+merged_df_2 <- merged_df %>% select(-Taxonomy)
+merged_df_2 <- merged_df_2 %>% select(-X)
+
+write.csv(merged_df_2, file="Color Extremes and taxonomy_krusk_simper.csv")
+
+
+rm(list=c("merged_df", "merged_df_2"))
+```
+
+
+
+
+
+

@@ -1,0 +1,212 @@
+---
+title: "Determining the % of Core ASVs that are captured by swabs of different colors"
+author: "Skarlupka"
+date: '2024-05-17'
+output: html_document
+---
+
+#Intro
+```{r}
+#The goal of this code is the pull out a list of ASVs that could be considered "Core", and then determining what percentage of those core ASVs are captured by the swabs.
+
+```
+#Set working directory
+```{r}
+
+setwd("INSERT ADDRESS HERE")
+
+```
+
+#Loading Libraries
+```{r, Libraries}
+library("ggplot2")
+library("phyloseq")
+library("vegan")
+library("DESeq2")
+library("reltools")
+library("phylosmith")
+library("gridExtra")
+
+set.seed(81471438)
+```
+
+#Importing files of interest
+```{r, import the files of interest}
+#Using the rarefied and abundance cutoff phyloseq object from "Swab Photo Score Analysis.Rmd". 
+
+physeq.swab1.abund
+
+```
+
+
+#Rumen Liquid - Determine which ASVs are Core to the Rumen Liquids
+```{r}
+#This chunk was generated with ChatGPT
+
+# Subset the phyloseq object based on the metadata value
+subset_physeq <- subset_samples(physeq.swab1.abund, PercentileName == "RL")
+
+# Convert the abundance data to presence/absence data (binary data)
+pa_physeq <- transform_sample_counts(subset_physeq, function(x) ifelse(x > 0, 1, 0))
+
+# Calculate the prevalence of each ASV
+prevalence <- apply(otu_table(pa_physeq), 2, function(x) sum(x) / length(x))
+
+# Determine the ASVs present in more than 80% of samples
+threshold <- 0.8
+bac_RL_asv_ids <- names(prevalence[prevalence > threshold])
+
+# Output the result
+bac_RL_asv_ids
+#242 ASVs identified
+
+```
+
+
+##Rumen Liquid - Remove ASVs that are not in the "Core" liquid list
+```{r}
+physeq.RLPrune <- prune_taxa(taxa_names(physeq.swab1.abund) %in% bac_RL_asv_ids , physeq.swab1.abund)
+
+```
+
+
+##Rumen Liquid - Count how many ASVs from the "Core Liquid" list are present
+```{r}
+#Convert counts to 1 if they are >0.
+pa_physeq <- transform_sample_counts(physeq.RLPrune, function(x) ifelse(x > 0, 1, 0))
+
+#Add a new column in the original metadata. This column will take the result of a sum of the ASV values for each sample divided by the length of the ASV table. 
+sample_data(physeq.swab1.abund)$RLPrev <- rowSums(otu_table(pa_physeq)) / ntaxa(pa_physeq)
+
+
+```
+
+##Rumen Liquid - Plot the percentage of prevalent ASVs captured 
+```{r}
+physeq.swab1 <- subset_samples(physeq.swab1.abund, Swab_Rumen=="Swab")
+
+b_RL_Prev <- ggplot(sample_data(physeq.swab1), aes(x = Darkness, y = RLPrev)) +
+  geom_point() +  # Add points to the plot
+  geom_smooth(method = "lm", se = FALSE) +  # Add a line of best fit
+  labs(x = "Darkness Score", y = "% of Liquid Bacterial ASVs Captured") +  # Add axis labels and title
+  theme_minimal()  # Optional: apply a minimal theme to the plot
+
+b_RL_Prev
+
+
+cor.test(sample_data(physeq.swab1)$Darkness, sample_data(physeq.swab1)$RLPrev, method = "spearman")
+# data:  sample_data(physeq.swab1)$Darkness and sample_data(physeq.swab1)$RLPrev
+# S = 5953053, p-value = 5.223e-07
+# alternative hypothesis: true rho is not equal to 0
+# sample estimates:
+#      rho 
+# 0.259389
+
+
+cor.test(sample_data(physeq.swab1)$Darkness, sample_data(physeq.swab1)$RLPrev, method = "kendall")
+# data:  sample_data(physeq.swab1)$Darkness and sample_data(physeq.swab1)$RLPrev
+# z = 4.9364, p-value = 7.959e-07
+# alternative hypothesis: true tau is not equal to 0
+# sample estimates:
+#      tau 
+# 0.173783
+
+
+```
+
+
+
+
+#Rumen Solid - Determine which ASVs are Core to the Rumen Solids
+```{r}
+#Generated with ChatGPT
+
+# Subset the phyloseq object based on the metadata value
+subset_physeq <- subset_samples(physeq.swab1.abund, PercentileName == "RS")
+
+# Convert the abundance data to presence/absence data (binary data)
+pa_physeq <- transform_sample_counts(subset_physeq, function(x) ifelse(x > 0, 1, 0))
+
+# Calculate the prevalence of each ASV
+prevalence <- apply(otu_table(pa_physeq), 2, function(x) sum(x) / length(x))
+
+# Determine the ASVs present in more than 80% of samples
+threshold <- 0.8
+bac_RS_asv_ids <- names(prevalence[prevalence > threshold])
+
+# Output the result
+bac_RS_asv_ids
+
+#396 ASVs identified
+
+```
+
+
+##Rumen Solid - Remove ASVs that are not in the "Core" liquid list
+```{r}
+physeq.RSPrune <- prune_taxa(taxa_names(physeq.swab1.abund) %in% bac_RS_asv_ids , physeq.swab1.abund)
+
+```
+
+
+##Rumen Solid - Count how many ASVs from the "Core Liquid" list are present
+```{r}
+#Convert counts to 1 if they are >0.
+pa_physeq <- transform_sample_counts(physeq.RSPrune, function(x) ifelse(x > 0, 1, 0))
+
+#Add a new column in the metadata. This column will take the result of a sum of the ASV values for each sample divided by the length of the ASV table. 
+sample_data(physeq.swab1.abund)$RSPrev <- rowSums(otu_table(pa_physeq)) / ntaxa(pa_physeq)
+
+
+```
+
+##Rumen Solid - Plot the percentage of prevalent ASVs captured 
+```{r}
+physeq.swab1 <- subset_samples(physeq.swab1.abund, Swab_Rumen=="Swab")
+
+b_RS_Prev <- ggplot(sample_data(physeq.swab1), aes(x = Darkness, y = RSPrev)) +
+  geom_point() +  # Add points to the plot
+  geom_smooth(method = "lm", se = FALSE) +  # Add a line of best fit
+  labs(x = "Darkness Score", y = "% of Solid Bacterial ASVs Captured") +  # Add axis labels and title
+  theme_minimal()  # Optional: apply a minimal theme to the plot
+
+b_RS_Prev
+
+
+cor.test(sample_data(physeq.swab1)$Darkness, sample_data(physeq.swab1)$RSPrev, method = "spearman")
+# data:  sample_data(physeq.swab1)$Darkness and sample_data(physeq.swab1)$RSPrev
+# S = 5987143, p-value = 8.095e-07
+# alternative hypothesis: true rho is not equal to 0
+# sample estimates:
+#       rho 
+# 0.2551479 
+
+cor.test(sample_data(physeq.swab1)$Darkness, sample_data(physeq.swab1)$RSPrev, method = "kendall")
+# data:  sample_data(physeq.swab1)$Darkness and sample_data(physeq.swab1)$RSPrev
+# z = 4.794, p-value = 1.635e-06
+# alternative hypothesis: true tau is not equal to 0
+# sample estimates:
+#       tau 
+# 0.1685668 
+
+grid.arrange(b_RS_Prev, b_RL_Prev, f_RS_Prev, f_RL_Prev, ncol=2)
+```
+
+
+```{r}
+bac_asvs <- c(bac_RS_asv_ids, bac_RL_asv_ids)
+bac_asvs_unique <- unique(bac_asvs)
+#RL: 242 Total
+#RS: 396 total
+#471 unique ASVs
+
+table(bac_RL_asv_ids %in% bac_RS_asv_ids)
+#75 "unique" to the RL
+
+table(bac_RS_asv_ids %in% bac_RL_asv_ids)
+#229 "unique" to the RS
+
+```
+
+
+
